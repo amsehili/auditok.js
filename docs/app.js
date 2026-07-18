@@ -2,9 +2,13 @@ import {
   load,
   microphone,
   splitAll,
+  calculateEnergy,
   computeFrameEnergies,
   estimateEnergyThreshold,
 } from "./lib/browser/index.js";
+import { createWebrtcValidator } from "./lib/webrtcvad/index.js";
+
+const WEBRTC_RATES = [8000, 16000, 32000, 48000];
 
 const $ = (id) => document.getElementById(id);
 
@@ -26,7 +30,19 @@ const sliders = {
   minDur: { input: $("min-dur"), output: $("min-dur-value") },
   maxSilence: { input: $("max-silence"), output: $("max-silence-value") },
   maxDur: { input: $("max-dur"), output: $("max-dur-value") },
+  maxLeadingSilence: {
+    input: $("max-leading-silence"),
+    output: $("max-leading-silence-value"),
+  },
+  maxTrailingSilence: {
+    input: $("max-trailing-silence"),
+    output: $("max-trailing-silence-value"),
+  },
 };
+const sampleRateSelect = $("sample-rate");
+const liveMeter = $("live-meter");
+const liveTime = $("live-time");
+const liveBar = $("live-bar");
 
 let audio = null; // { channelData, sampleRate, name }
 let events = [];
@@ -46,10 +62,14 @@ function setStatus(text, isError = false) {
 
 // ----------------------------------------------------------- audio input
 
+function chosenSampleRate() {
+  return Number(sampleRateSelect.value);
+}
+
 async function useFile(file) {
   setStatus(`decoding ${file.name} …`);
   try {
-    const region = await load(file);
+    const region = await load(file, { sampleRate: chosenSampleRate() });
     setAudio(region, file.name);
   } catch (error) {
     setStatus(`could not decode ${file.name}: ${error.message}`, true);
@@ -88,7 +108,7 @@ recordBtn.addEventListener("click", async () => {
     return;
   }
   try {
-    mic = await microphone();
+    mic = await microphone({ sampleRate: chosenSampleRate() });
   } catch (error) {
     setStatus(`microphone unavailable: ${error.message}`, true);
     return;
@@ -96,12 +116,48 @@ recordBtn.addEventListener("click", async () => {
   recordBtn.classList.add("recording");
   recordBtn.textContent = "stop recording";
   setStatus("recording — click « stop recording » when done …");
+  liveMeter.hidden = false;
   const recorded = [];
+  // live feedback: level bar + "valid frame" hint against the
+  // threshold slider, on ~50 ms batches of the incoming chunks
+  const meterRate = mic.sampleRate;
+  let meterBatch = [];
+  let meterSamples = 0;
+  let recordedSamples = 0;
+  let lastPaint = 0;
   for await (const chunk of mic.chunks) {
     recorded.push(chunk);
+    recordedSamples += chunk.length;
+    meterBatch.push(chunk);
+    meterSamples += chunk.length;
+    if (meterSamples >= meterRate * 0.05) {
+      const batch = new Float32Array(meterSamples);
+      let at = 0;
+      for (const part of meterBatch) {
+        batch.set(part, at);
+        at += part.length;
+      }
+      meterBatch = [];
+      meterSamples = 0;
+      const now = performance.now();
+      if (now - lastPaint > 60) {
+        lastPaint = now;
+        const energy = calculateEnergy(batch);
+        const percent = Math.max(0, Math.min(100, ((energy + 20) / 110) * 100));
+        liveBar.style.width = `${percent}%`;
+        liveMeter.classList.toggle(
+          "valid",
+          energy >= Number(thresholdSlider.value),
+        );
+        liveTime.textContent = `${(recordedSamples / meterRate).toFixed(1)} s`;
+      }
+    }
   }
   const { sampleRate } = mic;
   mic = null;
+  liveMeter.hidden = true;
+  liveMeter.classList.remove("valid");
+  liveBar.style.width = "0%";
   recordBtn.classList.remove("recording");
   recordBtn.textContent = "record the microphone";
   let total = 0;
@@ -130,6 +186,17 @@ function setAudio(region, name) {
     `${name} — ${duration.toFixed(2)} s, ${region.sampleRate} Hz, ` +
       `${region.channelData.length} channel(s)`,
   );
+  // webrtc only accepts 8/16/32/48 kHz
+  const webrtcOption = modeSelect.querySelector('option[value="webrtc"]');
+  const webrtcOk = WEBRTC_RATES.includes(region.sampleRate);
+  webrtcOption.disabled = !webrtcOk;
+  webrtcOption.title = webrtcOk
+    ? ""
+    : `webrtc requires ${WEBRTC_RATES.join("/")} Hz audio`;
+  if (!webrtcOk && modeSelect.value === "webrtc") {
+    modeSelect.value = "fixed";
+    modeSelect.dispatchEvent(new Event("change"));
+  }
   workbench.hidden = false;
   runDetection();
 }
@@ -145,13 +212,18 @@ function currentOptions() {
       Number(sliders.maxDur.input.value) > 30 // right end of the slider = no limit
         ? null
         : Number(sliders.maxDur.input.value),
+    maxLeadingSilence: Number(sliders.maxLeadingSilence.input.value),
+    maxTrailingSilence:
+      Number(sliders.maxTrailingSilence.input.value) > 1 // right end = keep all
+        ? null
+        : Number(sliders.maxTrailingSilence.input.value),
   };
   if (mode === "fixed") {
     options.energyThreshold = Number(thresholdSlider.value);
-  } else {
+  } else if (mode !== "webrtc") {
     options.validator = mode; // "otsu" | "percentile"
   }
-  return options;
+  return { mode, options };
 }
 
 let detectTimer = null;
@@ -163,8 +235,18 @@ function scheduleDetection() {
 
 async function runDetection() {
   if (audio === null) return;
-  const options = currentOptions();
+  const { mode, options } = currentOptions();
+  let webrtcValidator = null;
   try {
+    if (mode === "webrtc") {
+      // the VAD is stateful: a fresh instance per run, so results
+      // don't depend on previous runs
+      webrtcValidator = await createWebrtcValidator({
+        sampleRate: audio.sampleRate,
+        mode: 1,
+      });
+      options.validator = webrtcValidator;
+    }
     events = await splitAll(audio, options);
   } catch (error) {
     summary.textContent = error.message;
@@ -172,28 +254,32 @@ async function runDetection() {
     drawWaveform();
     renderEvents();
     return;
+  } finally {
+    webrtcValidator?.destroy();
   }
-  if (options.validator !== undefined) {
+  let thresholdText;
+  if (mode === "webrtc") {
+    resolvedThreshold = null;
+    thresholdText = "webrtc VAD, aggressiveness 1 (no energy threshold)";
+  } else if (typeof options.validator === "string") {
     const frameSamples = Math.floor(0.05 * audio.sampleRate);
     const energies = computeFrameEnergies(audio.channelData, frameSamples);
     resolvedThreshold =
       energies.length > 0
         ? estimateEnergyThreshold(energies, options.validator)
         : null;
+    thresholdText =
+      resolvedThreshold === null
+        ? "input shorter than one analysis window"
+        : resolvedThreshold === Infinity
+          ? "input is digitally silent — nothing to detect"
+          : `threshold ${resolvedThreshold.toFixed(1)} dB (${options.validator})`;
   } else {
     resolvedThreshold = options.energyThreshold;
+    thresholdText = `threshold ${resolvedThreshold.toFixed(1)} dB (fixed)`;
   }
   const totalDur = audio.channelData[0].length / audio.sampleRate;
   const detectedDur = events.reduce((sum, e) => sum + e.duration, 0);
-  let thresholdText;
-  if (resolvedThreshold === null) {
-    thresholdText = "input shorter than one analysis window";
-  } else if (resolvedThreshold === Infinity) {
-    thresholdText = "input is digitally silent — nothing to detect";
-  } else {
-    const how = options.validator === undefined ? "fixed" : options.validator;
-    thresholdText = `threshold ${resolvedThreshold.toFixed(1)} dB (${how})`;
-  }
   summary.textContent =
     `${events.length} event(s) · ${thresholdText} · ` +
     `${detectedDur.toFixed(2)} s of activity in ${totalDur.toFixed(2)} s`;
@@ -209,10 +295,16 @@ modeSelect.addEventListener("change", () => {
 
 for (const { input, output } of Object.values(sliders)) {
   input.addEventListener("input", () => {
-    output.textContent =
-      input === sliders.maxDur.input && Number(input.value) > 30
-        ? "∞"
-        : input.value;
+    if (input === sliders.maxDur.input && Number(input.value) > 30) {
+      output.textContent = "∞";
+    } else if (
+      input === sliders.maxTrailingSilence.input &&
+      Number(input.value) > 1
+    ) {
+      output.textContent = "all";
+    } else {
+      output.textContent = input.value;
+    }
     scheduleDetection();
   });
 }

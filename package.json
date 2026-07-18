@@ -59,7 +59,7 @@
     "build": "tsc -p tsconfig.json",
     "build:webrtcvad": "tsc -p webrtcvad/tsconfig.json",
     "test": "vitest run",
-    "demo:lib": "npm run build && rm -rf docs/lib && mkdir -p docs/lib/browser && cp dist/*.js docs/lib/ && cp dist/browser/*.js docs/lib/browser/",
+    "demo:lib": "npm run build && npm run build:webrtcvad && rm -rf docs/lib && mkdir -p docs/lib/browser docs/lib/webrtcvad && cp dist/*.js docs/lib/ && cp dist/browser/*.js docs/lib/browser/ && cp webrtcvad/dist/*.js docs/lib/webrtcvad/",
     "demo:serve": "npx serve docs",
     "prepublishOnly": "npm run build && npm test"
   },

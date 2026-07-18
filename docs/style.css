@@ -105,6 +105,63 @@ a { color: var(--accent); }
 #status { color: var(--muted); margin: 0.6rem 0 0; }
 #status.error { color: #d33; }
 
+.io-options {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.io-options select {
+  font: inherit;
+  padding: 0.15rem;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#live-meter {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-top: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+#live-meter[hidden] { display: none; }
+
+#live-time { color: var(--muted); min-width: 4rem; }
+
+#live-track {
+  flex: 1;
+  height: 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+#live-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--muted);
+  transition: width 0.06s linear;
+}
+
+#live-meter.valid #live-bar { background: var(--accent); }
+
+#live-flag {
+  font-size: 0.85rem;
+  color: var(--muted);
+  opacity: 0.35;
+  transition: opacity 0.1s;
+}
+
+#live-meter.valid #live-flag {
+  color: var(--accent);
+  opacity: 1;
+  font-weight: 600;
+}
+
 #controls {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

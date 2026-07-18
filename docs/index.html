@@ -29,8 +29,25 @@
           — <button id="example-btn" class="button">try the example</button>
           — <button id="record-btn" class="button">record the microphone</button>
         </p>
+        <p class="io-options">
+          <label for="sample-rate">Decoding / recording sample rate</label>
+          <select id="sample-rate"
+                  title="Applies to compressed files and the microphone; WAV files keep their own rate">
+            <option value="8000">8000 Hz</option>
+            <option value="16000">16000 Hz</option>
+            <option value="22050">22050 Hz</option>
+            <option value="32000">32000 Hz</option>
+            <option value="44100">44100 Hz</option>
+            <option value="48000" selected>48000 Hz</option>
+          </select>
+        </p>
       </div>
       <p id="status" hidden></p>
+      <div id="live-meter" hidden>
+        <span id="live-time">0.0 s</span>
+        <div id="live-track"><div id="live-bar"></div></div>
+        <span id="live-flag">valid frame</span>
+      </div>
     </section>
 
     <section id="workbench" hidden>
@@ -42,6 +59,7 @@
               <option value="fixed" selected>fixed (slider)</option>
               <option value="otsu">auto — otsu</option>
               <option value="percentile">auto — percentile (p10)</option>
+              <option value="webrtc">speech only — webrtc VAD</option>
             </select>
           </div>
           <div class="control" id="threshold-control">
@@ -64,12 +82,22 @@
               <output id="max-dur-value">&#8734;</output></label>
             <input type="range" id="max-dur" min="0.5" max="30.5" step="0.5" value="30.5" />
           </div>
+          <div class="control">
+            <label for="max-leading-silence">Leading silence kept
+              <output id="max-leading-silence-value">0</output> s</label>
+            <input type="range" id="max-leading-silence" min="0" max="1" step="0.05" value="0" />
+          </div>
+          <div class="control">
+            <label for="max-trailing-silence">Trailing silence kept
+              <output id="max-trailing-silence-value">all</output></label>
+            <input type="range" id="max-trailing-silence" min="0" max="1.05" step="0.05" value="1.05" />
+          </div>
         </div>
         <p id="detection-summary"></p>
       </div>
 
       <div class="card">
-        <canvas id="waveform" height="180"></canvas>
+        <canvas id="waveform" height="90"></canvas>
         <p class="hint">Detected events are highlighted — click one to play it.</p>
       </div>
 
