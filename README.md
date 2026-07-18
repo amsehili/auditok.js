@@ -162,6 +162,19 @@ for await (const event of split(audio, {
 })) { ... }
 ```
 
+To detect *speech* specifically rather than any acoustic activity, the
+[auditok-webrtcvad](https://www.npmjs.com/package/auditok-webrtcvad)
+add-on (in this repository under `webrtcvad/`) provides the WebRTC voice
+activity detector as such a validator — libfvad compiled to a ~30 KB
+WASM binary, the counterpart of Python auditok's `validator="webrtc:N"`:
+
+```js
+import { createWebrtcValidator } from "auditok-webrtcvad";
+
+const validator = await createWebrtcValidator({ sampleRate: 16000, mode: 1 });
+for await (const event of split(audio, { validator, maxSilence: 0.1 })) { ... }
+```
+
 ### `trim(input, options)` → `Promise<AudioRegion>`
 
 Audio from the start of the first detection to the end of the last —
@@ -209,9 +222,12 @@ generated with the Python package (`tools/generate_fixtures.py`): the JS
 test suite replays ~300 recorded cases through the tokenizer, `split` and
 the threshold estimators.
 
-Not (yet) ported: the WebRTC VAD validator (`validator="webrtc"` in
-Python — planned as an optional WASM build), live threshold calibration
-for streams, and the command-line tool.
+The WebRTC VAD validator (`validator="webrtc:N"` in Python) is available
+as the separate opt-in
+[auditok-webrtcvad](https://www.npmjs.com/package/auditok-webrtcvad)
+package, so the core keeps its size claim honest; its frame decisions are
+parity-tested bit for bit against Python's `webrtcvad`. Not (yet) ported:
+live threshold calibration for streams and the command-line tool.
 
 ## License
 

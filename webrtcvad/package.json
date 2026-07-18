@@ -1,0 +1,46 @@
+{
+  "name": "auditok-webrtcvad",
+  "version": "0.1.0",
+  "description": "WebRTC voice activity detector (libfvad compiled to WebAssembly, ~30 KB) as a frame validator for auditok: speech-specific detection with proper event shaping. Zero dependencies, runs in Node and browsers.",
+  "keywords": [
+    "webrtc",
+    "vad",
+    "voice-activity-detection",
+    "speech-detection",
+    "libfvad",
+    "wasm",
+    "auditok"
+  ],
+  "author": "Amine Sehili <amine.sehili@gmail.com>",
+  "license": "(MIT AND BSD-3-Clause)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amsehili/auditok.js.git",
+    "directory": "webrtcvad"
+  },
+  "homepage": "https://github.com/amsehili/auditok.js/tree/main/webrtcvad",
+  "bugs": {
+    "url": "https://github.com/amsehili/auditok.js/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE.libfvad"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build"
+  }
+}

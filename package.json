@@ -57,6 +57,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:webrtcvad": "tsc -p webrtcvad/tsconfig.json",
     "test": "vitest run",
     "demo:lib": "npm run build && rm -rf docs/lib && mkdir -p docs/lib/browser && cp dist/*.js docs/lib/ && cp dist/browser/*.js docs/lib/browser/",
     "demo:serve": "npx serve docs",
