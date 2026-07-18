@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>auditok — audio activity detection playground</title>
+  <meta name="description"
+        content="Interactive demo of auditok.js: split audio into events in the browser — energy-based audio activity detection with automatic thresholding." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>auditok<span class="accent">.js</span></h1>
+    <p class="tagline">
+      Audio activity detection and segmentation — in your browser, on your
+      device, nothing uploaded. A JavaScript port of the
+      <a href="https://github.com/amsehili/auditok">Python auditok</a> package.
+    </p>
+  </header>
+
+  <main>
+    <section id="input-card" class="card">
+      <div id="dropzone">
+        <p><strong>Drop an audio file here</strong> (wav, mp3, ogg, flac, …)</p>
+        <p>
+          or
+          <label class="button" for="file-input">choose a file</label>
+          <input type="file" id="file-input" accept="audio/*" />
+          — <button id="example-btn" class="button">try the example</button>
+          — <button id="record-btn" class="button">record the microphone</button>
+        </p>
+      </div>
+      <p id="status" hidden></p>
+    </section>
+
+    <section id="workbench" hidden>
+      <div class="card">
+        <div id="controls">
+          <div class="control">
+            <label for="mode">Threshold</label>
+            <select id="mode">
+              <option value="fixed" selected>fixed (slider)</option>
+              <option value="otsu">auto — otsu</option>
+              <option value="percentile">auto — percentile (p10)</option>
+            </select>
+          </div>
+          <div class="control" id="threshold-control">
+            <label for="threshold">Energy threshold
+              <output id="threshold-value">50</output> dB</label>
+            <input type="range" id="threshold" min="20" max="90" step="1" value="50" />
+          </div>
+          <div class="control">
+            <label for="min-dur">Min duration
+              <output id="min-dur-value">0.2</output> s</label>
+            <input type="range" id="min-dur" min="0.05" max="2" step="0.05" value="0.2" />
+          </div>
+          <div class="control">
+            <label for="max-silence">Max silence inside an event
+              <output id="max-silence-value">0.3</output> s</label>
+            <input type="range" id="max-silence" min="0" max="2" step="0.05" value="0.3" />
+          </div>
+          <div class="control">
+            <label for="max-dur">Max duration
+              <output id="max-dur-value">&#8734;</output></label>
+            <input type="range" id="max-dur" min="0.5" max="30.5" step="0.5" value="30.5" />
+          </div>
+        </div>
+        <p id="detection-summary"></p>
+      </div>
+
+      <div class="card">
+        <canvas id="waveform" height="180"></canvas>
+        <p class="hint">Detected events are highlighted — click one to play it.</p>
+      </div>
+
+      <div class="card">
+        <div id="events-header">
+          <h2>Events</h2>
+          <span>
+            <button id="download-labels" class="button">Audacity labels</button>
+            <button id="download-json" class="button">JSON</button>
+          </span>
+        </div>
+        <table id="events-table">
+          <thead>
+            <tr><th></th><th>#</th><th>start</th><th>end</th><th>duration</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      Runs entirely client-side with
+      <a href="https://github.com/amsehili/auditok.js">auditok.js</a>
+      (<code>npm install auditok</code>) — same engine, parameters and dB
+      scale as <a href="https://auditok.readthedocs.io/">Python auditok</a>.
+      MIT license.
+    </p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

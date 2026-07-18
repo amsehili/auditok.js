@@ -58,6 +58,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "demo:lib": "npm run build && rm -rf docs/lib && mkdir -p docs/lib/browser && cp dist/*.js docs/lib/ && cp dist/browser/*.js docs/lib/browser/",
+    "demo:serve": "npx serve docs",
     "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {
