@@ -17,6 +17,8 @@ import { StreamTokenizer } from "./tokenizer.js";
 
 const DEFAULT_ANALYSIS_WINDOW = 0.05;
 const DEFAULT_ENERGY_THRESHOLD = 50;
+const DEFAULT_CALIBRATION_DUR = 3;
+const DEFAULT_MIN_ENERGY_THRESHOLD = 40;
 const EPSILON = 1e-10;
 
 /** One analysis window as planar per-channel samples. This is what a
@@ -90,12 +92,24 @@ export interface SplitOptions {
    * `energyThreshold` is overlooked. A string selects automatic
    * threshold estimation: `"otsu"`, `"percentile"` (alias of `"p10"`)
    * or `"pXX"` (noise floor read at the XXth percentile of window
-   * energies, plus a 6 dB margin). Estimation reads the whole input
-   * before detection starts, so it is not available for chunk-stream
-   * input. A function is called with each analysis window (planar
-   * per-channel samples) and returns whether the window is valid.
+   * energies, plus a 6 dB margin). For in-memory input the threshold
+   * is estimated from the whole input before detection starts; for
+   * chunk-stream input it is calibrated on the first `calibrationDur`
+   * seconds (clamped to `minEnergyThreshold`), and the calibration
+   * audio is replayed so no data is lost. A function is called with
+   * each analysis window (planar per-channel samples) and returns
+   * whether the window is valid.
    */
   validator?: string | ((frame: AudioFrame) => boolean);
+  /** Duration in seconds of chunk-stream audio used to calibrate the
+   * threshold when `validator` is an estimation string, default 3.
+   * Ignored for in-memory input, which is estimated as a whole. */
+  calibrationDur?: number;
+  /** Lower bound in dB for a threshold calibrated on a chunk stream,
+   * default 40. Guards against a too-quiet calibration window; also
+   * used as the threshold when the calibration audio is digitally
+   * silent (e.g., a muted microphone), so detection keeps running. */
+  minEnergyThreshold?: number;
   /** Channel used for energy computation on multichannel audio:
    * `"any"` (default, maximum over channels), `"mix"` or a channel
    * index. */
@@ -288,11 +302,72 @@ function durationToWindowCount(
   return round(duration / windowDur + epsilon);
 }
 
+interface StreamCalibration {
+  method: ThresholdMethod;
+  percentile?: number;
+  /** Number of analysis windows read for calibration. */
+  nFrames: number;
+  floor: number;
+  useChannel: ChannelSelection;
+  setThreshold(threshold: number): void;
+}
+
+/** Read the first `nFrames` analysis windows of a stream, estimate the
+ * energy threshold from them (clamped to `floor`), then replay them and
+ * continue with the rest — no data is lost to calibration. Mirrors
+ * Python auditok's live calibration. */
+async function* calibrateFrames(
+  frames: AsyncGenerator<AudioFrame>,
+  calibration: StreamCalibration,
+): AsyncGenerator<AudioFrame> {
+  // manual iteration: a `break` out of for-await would close `frames`
+  const iterator = frames[Symbol.asyncIterator]();
+  const buffered: AudioFrame[] = [];
+  const energies: number[] = [];
+  while (buffered.length < calibration.nFrames) {
+    const { value, done } = await iterator.next();
+    if (done === true) {
+      break;
+    }
+    buffered.push(value);
+    energies.push(windowEnergy(value, calibration.useChannel));
+  }
+  if (buffered.length === 0) {
+    throw new Error(
+      "no audio data could be read for energy threshold calibration",
+    );
+  }
+  const estimate = estimateEnergyThreshold(
+    energies,
+    calibration.method,
+    calibration.percentile === undefined
+      ? {}
+      : { percentile: calibration.percentile },
+  );
+  // an infinite estimate means the calibration window is digitally
+  // silent (e.g., a muted microphone): fall back to the floor and
+  // keep listening
+  calibration.setThreshold(
+    Number.isFinite(estimate)
+      ? Math.max(estimate, calibration.floor)
+      : calibration.floor,
+  );
+  yield* buffered;
+  while (true) {
+    const { value, done } = await iterator.next();
+    if (done === true) {
+      return;
+    }
+    yield value;
+  }
+}
+
 interface TokenizationPlan {
   normalized: NormalizedInput;
   frameSamples: number;
   windowDur: number;
   tokenizer: StreamTokenizer<AudioFrame>;
+  calibration?: StreamCalibration;
 }
 
 function planTokenization(
@@ -339,6 +414,7 @@ function planTokenization(
   const windowDur = frameSamples / sampleRate;
 
   let validator: (frame: AudioFrame) => boolean;
+  let calibration: StreamCalibration | undefined;
   const givenValidator = options.validator;
   if (typeof givenValidator === "function") {
     validator = givenValidator;
@@ -346,24 +422,41 @@ function planTokenization(
     let threshold: number;
     if (typeof givenValidator === "string") {
       const { method, percentile } = parseValidatorName(givenValidator);
-      if (normalized.kind !== "memory") {
-        throw new Error(
-          "automatic threshold estimation needs to read the whole input " +
-            "before detection starts, which is not possible for " +
-            "chunk-stream input; collect the stream first or pass a " +
-            "fixed 'energyThreshold'",
+      if (normalized.kind === "memory") {
+        const energies = computeFrameEnergies(
+          normalized.channelData,
+          frameSamples,
+          useChannel,
         );
+        threshold = estimateEnergyThreshold(
+          energies,
+          method,
+          percentile === undefined ? {} : { percentile },
+        );
+      } else {
+        // chunk stream: calibrate on the first `calibrationDur`
+        // seconds; `threshold` is assigned by `calibrateFrames` before
+        // the tokenizer sees any frame
+        const calibrationDur =
+          options.calibrationDur ?? DEFAULT_CALIBRATION_DUR;
+        if (calibrationDur <= 0) {
+          throw new RangeError(
+            `'calibrationDur' (${calibrationDur}) must be > 0`,
+          );
+        }
+        threshold = NaN;
+        calibration = {
+          method,
+          percentile,
+          nFrames: Math.max(1, Math.ceil(calibrationDur / windowDur)),
+          floor:
+            options.minEnergyThreshold ?? DEFAULT_MIN_ENERGY_THRESHOLD,
+          useChannel,
+          setThreshold: (value) => {
+            threshold = value;
+          },
+        };
       }
-      const energies = computeFrameEnergies(
-        normalized.channelData,
-        frameSamples,
-        useChannel,
-      );
-      threshold = estimateEnergyThreshold(
-        energies,
-        method,
-        percentile === undefined ? {} : { percentile },
-      );
     } else if (givenValidator === undefined) {
       threshold = options.energyThreshold ?? DEFAULT_ENERGY_THRESHOLD;
     } else {
@@ -427,7 +520,7 @@ function planTokenization(
     strictMinLength: strictMinDur,
   });
 
-  return { normalized, frameSamples, windowDur, tokenizer };
+  return { normalized, frameSamples, windowDur, tokenizer, calibration };
 }
 
 function framesToRegion(
@@ -464,14 +557,17 @@ export async function* split(
   input: AudioInput,
   options: SplitOptions = {},
 ): AsyncGenerator<AudioRegion, void, void> {
-  const { normalized, frameSamples, windowDur, tokenizer } = planTokenization(
-    input,
-    options,
-  );
-  const frames =
-    normalized.kind === "memory"
-      ? memoryFrames(normalized.channelData, frameSamples)
-      : streamFrames(normalized.chunks, normalized.channels, frameSamples);
+  const { normalized, frameSamples, windowDur, tokenizer, calibration } =
+    planTokenization(input, options);
+  let frames: Generator<AudioFrame> | AsyncGenerator<AudioFrame>;
+  if (normalized.kind === "memory") {
+    frames = memoryFrames(normalized.channelData, frameSamples);
+  } else {
+    frames = streamFrames(normalized.chunks, normalized.channels, frameSamples);
+    if (calibration !== undefined) {
+      frames = calibrateFrames(frames, calibration);
+    }
+  }
   for await (const token of tokenizer.tokenize(frames)) {
     yield framesToRegion(
       token.frames,

@@ -145,10 +145,12 @@ overlooked:
   XXth percentile of window energies and adds a 6 dB margin
   (recall-oriented).
 
-Estimation reads the whole input before detection starts, so it is not
-available for chunk-stream input — pass a fixed `energyThreshold` there, or
-compute one yourself with `computeFrameEnergies` +
-`estimateEnergyThreshold`.
+For in-memory input the threshold is estimated from the whole input before
+detection starts. For chunk-stream input (e.g., a live microphone) it is
+**calibrated on the first `calibrationDur` seconds** (default 3), clamped to
+`minEnergyThreshold` (default 40 dB); the calibration audio is replayed, so
+no data is lost. A digitally silent calibration window (muted microphone)
+falls back to the floor and detection keeps running.
 
 A **function** validator receives each analysis window as planar
 per-channel samples and decides its validity — this is how you put proper

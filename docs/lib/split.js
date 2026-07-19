@@ -9,6 +9,8 @@ import { computeFrameEnergies, estimateEnergyThreshold, windowEnergy, } from "./
 import { StreamTokenizer } from "./tokenizer.js";
 const DEFAULT_ANALYSIS_WINDOW = 0.05;
 const DEFAULT_ENERGY_THRESHOLD = 50;
+const DEFAULT_CALIBRATION_DUR = 3;
+const DEFAULT_MIN_ENERGY_THRESHOLD = 40;
 const EPSILON = 1e-10;
 function isAudioBufferLike(input) {
     return (typeof input.getChannelData === "function" &&
@@ -130,6 +132,44 @@ function durationToWindowCount(duration, windowDur, round, epsilon = 0) {
     }
     return round(duration / windowDur + epsilon);
 }
+/** Read the first `nFrames` analysis windows of a stream, estimate the
+ * energy threshold from them (clamped to `floor`), then replay them and
+ * continue with the rest — no data is lost to calibration. Mirrors
+ * Python auditok's live calibration. */
+async function* calibrateFrames(frames, calibration) {
+    // manual iteration: a `break` out of for-await would close `frames`
+    const iterator = frames[Symbol.asyncIterator]();
+    const buffered = [];
+    const energies = [];
+    while (buffered.length < calibration.nFrames) {
+        const { value, done } = await iterator.next();
+        if (done === true) {
+            break;
+        }
+        buffered.push(value);
+        energies.push(windowEnergy(value, calibration.useChannel));
+    }
+    if (buffered.length === 0) {
+        throw new Error("no audio data could be read for energy threshold calibration");
+    }
+    const estimate = estimateEnergyThreshold(energies, calibration.method, calibration.percentile === undefined
+        ? {}
+        : { percentile: calibration.percentile });
+    // an infinite estimate means the calibration window is digitally
+    // silent (e.g., a muted microphone): fall back to the floor and
+    // keep listening
+    calibration.setThreshold(Number.isFinite(estimate)
+        ? Math.max(estimate, calibration.floor)
+        : calibration.floor);
+    yield* buffered;
+    while (true) {
+        const { value, done } = await iterator.next();
+        if (done === true) {
+            return;
+        }
+        yield value;
+    }
+}
 function planTokenization(input, options) {
     const { minDur = 0.2, maxDur = 5, maxSilence = 0.3, maxLeadingSilence = 0, maxTrailingSilence = null, strictMinDur = false, analysisWindow = DEFAULT_ANALYSIS_WINDOW, useChannel = "any", } = options;
     if (minDur <= 0) {
@@ -154,6 +194,7 @@ function planTokenization(input, options) {
     }
     const windowDur = frameSamples / sampleRate;
     let validator;
+    let calibration;
     const givenValidator = options.validator;
     if (typeof givenValidator === "function") {
         validator = givenValidator;
@@ -162,14 +203,30 @@ function planTokenization(input, options) {
         let threshold;
         if (typeof givenValidator === "string") {
             const { method, percentile } = parseValidatorName(givenValidator);
-            if (normalized.kind !== "memory") {
-                throw new Error("automatic threshold estimation needs to read the whole input " +
-                    "before detection starts, which is not possible for " +
-                    "chunk-stream input; collect the stream first or pass a " +
-                    "fixed 'energyThreshold'");
+            if (normalized.kind === "memory") {
+                const energies = computeFrameEnergies(normalized.channelData, frameSamples, useChannel);
+                threshold = estimateEnergyThreshold(energies, method, percentile === undefined ? {} : { percentile });
             }
-            const energies = computeFrameEnergies(normalized.channelData, frameSamples, useChannel);
-            threshold = estimateEnergyThreshold(energies, method, percentile === undefined ? {} : { percentile });
+            else {
+                // chunk stream: calibrate on the first `calibrationDur`
+                // seconds; `threshold` is assigned by `calibrateFrames` before
+                // the tokenizer sees any frame
+                const calibrationDur = options.calibrationDur ?? DEFAULT_CALIBRATION_DUR;
+                if (calibrationDur <= 0) {
+                    throw new RangeError(`'calibrationDur' (${calibrationDur}) must be > 0`);
+                }
+                threshold = NaN;
+                calibration = {
+                    method,
+                    percentile,
+                    nFrames: Math.max(1, Math.ceil(calibrationDur / windowDur)),
+                    floor: options.minEnergyThreshold ?? DEFAULT_MIN_ENERGY_THRESHOLD,
+                    useChannel,
+                    setThreshold: (value) => {
+                        threshold = value;
+                    },
+                };
+            }
         }
         else if (givenValidator === undefined) {
             threshold = options.energyThreshold ?? DEFAULT_ENERGY_THRESHOLD;
@@ -208,7 +265,7 @@ function planTokenization(input, options) {
         maxTrailingSilence: maxTrailingSilenceFrames,
         strictMinLength: strictMinDur,
     });
-    return { normalized, frameSamples, windowDur, tokenizer };
+    return { normalized, frameSamples, windowDur, tokenizer, calibration };
 }
 function framesToRegion(frames, sampleRate, start) {
     const channels = frames[0].length;
@@ -233,10 +290,17 @@ function framesToRegion(frames, sampleRate, start) {
  * read.
  */
 export async function* split(input, options = {}) {
-    const { normalized, frameSamples, windowDur, tokenizer } = planTokenization(input, options);
-    const frames = normalized.kind === "memory"
-        ? memoryFrames(normalized.channelData, frameSamples)
-        : streamFrames(normalized.chunks, normalized.channels, frameSamples);
+    const { normalized, frameSamples, windowDur, tokenizer, calibration } = planTokenization(input, options);
+    let frames;
+    if (normalized.kind === "memory") {
+        frames = memoryFrames(normalized.channelData, frameSamples);
+    }
+    else {
+        frames = streamFrames(normalized.chunks, normalized.channels, frameSamples);
+        if (calibration !== undefined) {
+            frames = calibrateFrames(frames, calibration);
+        }
+    }
     for await (const token of tokenizer.tokenize(frames)) {
         yield framesToRegion(token.frames, normalized.sampleRate, token.start * windowDur);
     }

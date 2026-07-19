@@ -115,12 +115,23 @@ recordBtn.addEventListener("click", async () => {
   }
   recordBtn.classList.add("recording");
   recordBtn.textContent = "stop recording";
-  setStatus("recording — click « stop recording » when done …");
+  // live calibration, as in the library: with an auto mode selected,
+  // the threshold is estimated from the first 3 s of the recording
+  // (clamped to a 40 dB floor) and drives the "valid frame" hint
+  const autoMode =
+    modeSelect.value !== "fixed" && modeSelect.value !== "webrtc";
+  let liveThreshold = null;
+  setStatus(
+    autoMode
+      ? "recording — calibrating the threshold on the first 3 s …"
+      : "recording — click « stop recording » when done …",
+  );
   liveMeter.hidden = false;
   const recorded = [];
   // live feedback: level bar + "valid frame" hint against the
-  // threshold slider, on ~50 ms batches of the incoming chunks
+  // calibrated (auto modes) or slider threshold, on ~50 ms batches
   const meterRate = mic.sampleRate;
+  const batchEnergies = [];
   let meterBatch = [];
   let meterSamples = 0;
   let recordedSamples = 0;
@@ -139,15 +150,31 @@ recordBtn.addEventListener("click", async () => {
       }
       meterBatch = [];
       meterSamples = 0;
+      const energy = calculateEnergy(batch);
+      batchEnergies.push(energy);
+      if (
+        autoMode &&
+        liveThreshold === null &&
+        recordedSamples >= meterRate * 3
+      ) {
+        const estimate = estimateByName(batchEnergies, modeSelect.value);
+        liveThreshold = Number.isFinite(estimate)
+          ? Math.max(estimate, 40)
+          : 40; // silent calibration window: fall back to the floor
+        sliders.threshold.output.textContent = liveThreshold.toFixed(1);
+        setStatus(
+          `recording — auto threshold ${liveThreshold.toFixed(1)} dB ` +
+            `(${modeSelect.value}) — click « stop recording » when done …`,
+        );
+      }
       const now = performance.now();
       if (now - lastPaint > 60) {
         lastPaint = now;
-        const energy = calculateEnergy(batch);
         const percent = Math.max(0, Math.min(100, ((energy + 20) / 110) * 100));
         liveBar.style.width = `${percent}%`;
         liveMeter.classList.toggle(
           "valid",
-          energy >= Number(thresholdSlider.value),
+          energy >= (liveThreshold ?? Number(thresholdSlider.value)),
         );
         liveTime.textContent = `${(recordedSamples / meterRate).toFixed(1)} s`;
       }

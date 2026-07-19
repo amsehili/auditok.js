@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   AudioRegion,
+  computeFrameEnergies,
   decodeWav,
+  estimateEnergyThreshold,
   fixPauses,
   split,
   splitAll,
@@ -104,13 +106,80 @@ describe("split", () => {
     await iterator.return();
   });
 
-  it("rejects estimation on chunk-stream input", async () => {
+  it("calibrates estimation on chunk-stream input on the first 3 s", async () => {
+    // reference: threshold estimated from the first ceil(3 / windowDur)
+    // windows, clamped to the default floor of 40 dB
+    const frameSamples = Math.floor(0.05 * bursts.sampleRate);
+    const windowDur = frameSamples / bursts.sampleRate;
+    const nFrames = Math.max(1, Math.ceil(3 / windowDur));
+    const calibrationData = bursts.channelData.map((channel) =>
+      channel.subarray(0, nFrames * frameSamples),
+    );
+    const threshold = Math.max(
+      estimateEnergyThreshold(
+        computeFrameEnergies(calibrationData, frameSamples),
+      ),
+      40,
+    );
+    const expected = await splitAll(bursts, { energyThreshold: threshold });
+    expect(expected.length).toBeGreaterThan(0);
+
+    const calibrated = await splitAll(chunkStream(bursts.channelData, 1234), {
+      sampleRate: bursts.sampleRate,
+      validator: "otsu",
+    });
+    expect(calibrated.map((e) => [e.start, e.end])).toEqual(
+      expected.map((e) => [e.start, e.end]),
+    );
+  });
+
+  it("replays the calibration audio, losing no events to calibration", async () => {
+    const sr = 16000;
+    const samples = new Float32Array(sr * 4);
+    samples.fill(0.0005); // quiet but not digitally silent background
+    samples.fill(0.3, sr, Math.floor(sr * 1.5)); // burst at 1.0-1.5 s
+    const events = await splitAll(chunkStream([samples], 1000), {
+      sampleRate: sr,
+      validator: "otsu",
+      maxTrailingSilence: 0,
+    });
+    expect(events.length).toBe(1);
+    expect(events[0].start).toBeCloseTo(1.0, 5);
+    expect(events[0].end).toBeCloseTo(1.5, 5);
+  });
+
+  it("falls back to minEnergyThreshold on a silent calibration window", async () => {
+    const sr = 16000;
+    const samples = new Float32Array(sr * 4); // digital silence
+    samples.fill(0.3, Math.floor(sr * 3.2), Math.floor(sr * 3.7));
+    const events = await splitAll(chunkStream([samples], 1000), {
+      sampleRate: sr,
+      validator: "otsu",
+    });
+    expect(events.length).toBe(1);
+    expect(events[0].start).toBeCloseTo(3.2, 5);
+
+    // a floor above the burst energy (~79.8 dB) must reject it
+    const rejected = await splitAll(chunkStream([samples], 1000), {
+      sampleRate: sr,
+      validator: "otsu",
+      minEnergyThreshold: 85,
+    });
+    expect(rejected.length).toBe(0);
+  });
+
+  it("validates calibrationDur and requires calibration data", async () => {
     await expect(
       splitAll(chunkStream(bursts.channelData, 800), {
         sampleRate: bursts.sampleRate,
         validator: "otsu",
+        calibrationDur: 0,
       }),
-    ).rejects.toThrow(/whole input/);
+    ).rejects.toThrow(/calibrationDur/);
+    async function* empty(): AsyncGenerator<Float32Array> {}
+    await expect(
+      splitAll(empty(), { sampleRate: 16000, validator: "otsu" }),
+    ).rejects.toThrow(/calibration/);
   });
 
   it("requires sampleRate for bare samples", async () => {
