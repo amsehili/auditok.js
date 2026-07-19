@@ -226,6 +226,16 @@ function currentOptions() {
   return { mode, options };
 }
 
+/** Estimate a threshold from a validator name ("otsu", "percentile"
+ * or "pXX"), mirroring how split resolves it. */
+function estimateByName(energies, name) {
+  if (name === "otsu") {
+    return estimateEnergyThreshold(energies, "otsu");
+  }
+  const percentile = name === "percentile" ? 10 : Number(name.slice(1));
+  return estimateEnergyThreshold(energies, "percentile", { percentile });
+}
+
 let detectTimer = null;
 
 function scheduleDetection() {
@@ -261,22 +271,29 @@ async function runDetection() {
   if (mode === "webrtc") {
     resolvedThreshold = null;
     thresholdText = "webrtc VAD, aggressiveness 1 (no energy threshold)";
+    sliders.threshold.output.textContent = "—";
   } else if (typeof options.validator === "string") {
     const frameSamples = Math.floor(0.05 * audio.sampleRate);
     const energies = computeFrameEnergies(audio.channelData, frameSamples);
     resolvedThreshold =
       energies.length > 0
-        ? estimateEnergyThreshold(energies, options.validator)
+        ? estimateByName(energies, options.validator)
         : null;
     thresholdText =
       resolvedThreshold === null
         ? "input shorter than one analysis window"
         : resolvedThreshold === Infinity
           ? "input is digitally silent — nothing to detect"
-          : `threshold ${resolvedThreshold.toFixed(1)} dB (${options.validator})`;
+          : `estimated threshold ${resolvedThreshold.toFixed(1)} dB ` +
+            `(${options.validator})`;
+    sliders.threshold.output.textContent =
+      resolvedThreshold === null || resolvedThreshold === Infinity
+        ? "—"
+        : resolvedThreshold.toFixed(1);
   } else {
     resolvedThreshold = options.energyThreshold;
     thresholdText = `threshold ${resolvedThreshold.toFixed(1)} dB (fixed)`;
+    sliders.threshold.output.textContent = String(resolvedThreshold);
   }
   const totalDur = audio.channelData[0].length / audio.sampleRate;
   const detectedDur = events.reduce((sum, e) => sum + e.duration, 0);

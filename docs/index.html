@@ -59,6 +59,8 @@
               <option value="fixed" selected>fixed (slider)</option>
               <option value="otsu">auto — otsu</option>
               <option value="percentile">auto — percentile (p10)</option>
+              <option value="p15">auto — percentile (p15)</option>
+              <option value="p20">auto — percentile (p20)</option>
               <option value="webrtc">speech only — webrtc VAD</option>
             </select>
           </div>
@@ -74,8 +76,8 @@
           </div>
           <div class="control">
             <label for="max-silence">Max silence inside an event
-              <output id="max-silence-value">0.3</output> s</label>
-            <input type="range" id="max-silence" min="0" max="2" step="0.05" value="0.3" />
+              <output id="max-silence-value">0.2</output> s</label>
+            <input type="range" id="max-silence" min="0" max="2" step="0.05" value="0.2" />
           </div>
           <div class="control">
             <label for="max-dur">Max duration
@@ -84,13 +86,13 @@
           </div>
           <div class="control">
             <label for="max-leading-silence">Leading silence kept
-              <output id="max-leading-silence-value">0</output> s</label>
-            <input type="range" id="max-leading-silence" min="0" max="1" step="0.05" value="0" />
+              <output id="max-leading-silence-value">0.1</output> s</label>
+            <input type="range" id="max-leading-silence" min="0" max="1" step="0.05" value="0.1" />
           </div>
           <div class="control">
             <label for="max-trailing-silence">Trailing silence kept
-              <output id="max-trailing-silence-value">all</output></label>
-            <input type="range" id="max-trailing-silence" min="0" max="1.05" step="0.05" value="1.05" />
+              <output id="max-trailing-silence-value">0.1</output></label>
+            <input type="range" id="max-trailing-silence" min="0" max="1.05" step="0.05" value="0.1" />
           </div>
         </div>
         <p id="detection-summary"></p>
